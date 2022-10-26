@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import queue
 import select
 import socket
 import struct
@@ -11,6 +12,7 @@ from time import time
 from typing import Coroutine, Tuple
 
 _ALL_BACKGROUND_TASKS = set()
+BACKGROUND_TUNNEL_EXCEPTIONS = queue.Queue()
 
 
 def _start_as_background_task(target: Coroutine) -> None:
@@ -18,7 +20,9 @@ def _start_as_background_task(target: Coroutine) -> None:
 
     Taken from https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
     """
+    name = target.__name__ + "_" + str(len(_ALL_BACKGROUND_TASKS))
     task = asyncio.create_task(target)
+    task.set_name(name)
 
     # Add task to the set. This creates a strong reference.
     _ALL_BACKGROUND_TASKS.add(task)
@@ -27,8 +31,7 @@ def _start_as_background_task(target: Coroutine) -> None:
     # make each task remove its own reference from the set after
     # completion:
     task.add_done_callback(_ALL_BACKGROUND_TASKS.discard)
-
-    print(task)
+    task.add_done_callback(lambda task: f"Task stopped or cancelled: {name}")
 
 
 async def handle_req_work_conn(
@@ -43,7 +46,7 @@ async def handle_req_work_conn(
     reader_worker, writer_worker = await asyncio.open_connection(sock=socket_worker)
 
     # Send the run id (TypeNewWorkConn)
-    _send(writer_worker, {"run_id": run_id}, 119)
+    await _send(writer_worker, {"run_id": run_id}, 119)
 
     # Wait for the server to ask to connect
     # We don't use the message as we don't need his content
@@ -75,7 +78,7 @@ async def handle_req_work_conn(
     socket_worker.close()
 
 
-def _send(writer: StreamWriter, msg, type):
+async def _send(writer: StreamWriter, msg, type):
     """Send a message to frps.
 
     First byte is the message type
@@ -89,6 +92,7 @@ def _send(writer: StreamWriter, msg, type):
     binary_message.extend(struct.pack(">q", len(json_raw)))
     binary_message.extend(json_raw)
     writer.write(binary_message)
+    await writer.drain()
 
 
 async def _read(reader: StreamReader):
@@ -116,7 +120,7 @@ async def _heartbeat(writer: StreamWriter):
     """Heartbeat to keep connection alive."""
     try:
         while True:
-            _send(writer, {}, 104)
+            await _send(writer, {}, 104)
             await asyncio.sleep(15)
     except Exception:
         pass
@@ -172,7 +176,7 @@ async def create_tunnel(
     reader, writer = await asyncio.open_connection(sock=frps_client)
 
     timestamp, privilege_key = _generate_privilege_key()
-    _send(
+    await _send(
         writer,
         {
             "version": "0.44.0",
@@ -212,7 +216,7 @@ async def create_tunnel(
     )
 
     # Sending proxy information `TypeNewProxy`
-    _send(writer, {"proxy_type": "http"}, 112)
+    await _send(writer, {"proxy_type": "http"}, 112)
     msg, msg_type = await _read(reader)
 
     if msg_type != 50:
