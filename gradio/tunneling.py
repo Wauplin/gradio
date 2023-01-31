@@ -4,6 +4,7 @@ import platform
 import re
 import subprocess
 from pathlib import Path
+from threading import Thread
 from typing import List
 
 VERSION = "0.1"
@@ -96,10 +97,28 @@ class Tunnel:
                 continue
             line = self.proc.stdout.readline()
             line = line.decode("utf-8")
+            print("(stdout)", line, end="")
             if "start proxy success" in line:
-                result = re.search("start proxy success: (.+)\n", line)
-                if result is None:
-                    raise ValueError("Could not create share URL")
-                else:
-                    url = result.group(1)
+                url = re.search("start proxy success: (.+)\n", line).group(1)
+        _read_logs_in_background(self.proc)
         return url
+
+
+def _read_logs_in_background(proc: subprocess.Popen[bytes]) -> None:
+    def _target_stdout():
+        print("Start checking stdout.")
+        while proc.poll() is None:
+            print("(stdout)", proc.stdout.readline().decode("utf-8"), end="")
+        print("Stop checking stdout.")
+
+    def _target_stderr():
+        print("Start checking stderr.")
+        while proc.poll() is None:
+            print("(stderr)", proc.stderr.readline().decode("utf-8"), end="")
+        print("Stop checking stderr.")
+
+    t_out = Thread(target=_target_stdout, daemon=True)
+    t_out.start()
+
+    t_err = Thread(target=_target_stderr, daemon=True)
+    t_err.start()

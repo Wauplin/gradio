@@ -1447,6 +1447,7 @@ class Blocks(BlockContext):
                 if not (quiet):
                     print(strings.en["SHARE_LINK_MESSAGE"])
             except RuntimeError:
+                raise
                 if self.analytics_enabled:
                     utils.error_analytics("Not able to set up tunnel")
                 self.share_url = None
